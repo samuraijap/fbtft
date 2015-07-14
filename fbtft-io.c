@@ -147,41 +147,53 @@ do {                                  \
 } while (0)
 
 int fbtft_write_gpio8_wr(struct fbtft_par *par, void *buf, size_t len)
-{
-	unsigned int set = 0;
-	unsigned int reset = 0;
-	u8 data;
-
-	fbtft_par_dbg_hex(DEBUG_WRITE, par, par->info->device, u8, buf, len,
-		"%s(len=%d): ", __func__, len);
-
-	while (len--) {
-		data = *(u8 *) buf;
-		buf++;
-
-		/* Set data */
-		GPIOSET(par->gpio.db[0], (data&0x01));
-		GPIOSET(par->gpio.db[1], (data&0x02));
-		GPIOSET(par->gpio.db[2], (data&0x04));
-		GPIOSET(par->gpio.db[3], (data&0x08));
-		GPIOSET(par->gpio.db[4], (data&0x10));
-		GPIOSET(par->gpio.db[5], (data&0x20));
-		GPIOSET(par->gpio.db[6], (data&0x40));
-		GPIOSET(par->gpio.db[7], (data&0x80));
-		writel(set, __io_address(GPIO_BASE+0x1C));
-		writel(reset, __io_address(GPIO_BASE+0x28));
-
-		/* Pulse /WR low */
-		writel((1<<par->gpio.wr),  __io_address(GPIO_BASE+0x28));
-		writel(0,  __io_address(GPIO_BASE+0x28)); /* used as a delay */
-		writel((1<<par->gpio.wr),  __io_address(GPIO_BASE+0x1C));
-
-		set = 0;
-		reset = 0;
-	}
-
-	return 0;
-}
+133 {
+134         u8 data;
+135         int i;
+136 #ifndef DO_NOT_OPTIMIZE_FBTFT_WRITE_GPIO
+137         static u8 prev_data;
+138 #endif
+139 
+140         fbtft_par_dbg_hex(DEBUG_WRITE, par, par->info->device, u8, buf, len,
+141                 "%s(len=%d): ", __func__, len);
+142 
+143         while (len--) {
+144                 data = *(u8 *) buf;
+145 
+146                 /* Start writing by pulling down /WR */
+147                 gpio_set_value(par->gpio.wr, 0);
+148 
+149                 /* Set data */
+150 #ifndef DO_NOT_OPTIMIZE_FBTFT_WRITE_GPIO
+151                 if (data == prev_data) {
+152                         gpio_set_value(par->gpio.wr, 0); /* used as delay */
+153                 } else {
+154                         for (i = 0; i < 8; i++) {
+155                                 if ((data & 1) != (prev_data & 1))
+156                                         gpio_set_value(par->gpio.db[i],
+157                                                                 data & 1);
+158                                 data >>= 1;
+159                                 prev_data >>= 1;
+160                         }
+161                 }
+162 #else
+163                 for (i = 0; i < 8; i++) {
+164                         gpio_set_value(par->gpio.db[i], data & 1);
+165                         data >>= 1;
+166                 }
+167 #endif
+168 
+169                 /* Pullup /WR */
+170                 gpio_set_value(par->gpio.wr, 1);
+171 
+172 #ifndef DO_NOT_OPTIMIZE_FBTFT_WRITE_GPIO
+173                 prev_data = *(u8 *) buf;
+174 #endif
+175                 buf++;
+176         }
+177 
+178         return 0;
+179 }
 EXPORT_SYMBOL(fbtft_write_gpio8_wr);
 
 int fbtft_write_gpio16_wr(struct fbtft_par *par, void *buf, size_t len)
